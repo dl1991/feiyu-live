@@ -43,7 +43,10 @@ import com.dl1991.feiyu.dafeiyu.DfyLive
 import com.dl1991.feiyu.dafeiyu.DfyLiveRoomScreen
 import com.dl1991.feiyu.dafeiyu.DfyRoutes
 import com.dl1991.feiyu.dafeiyu.DfySecrets
+import com.dl1991.feiyu.dafeiyu.CrewRole
 import com.dl1991.feiyu.dafeiyu.EvType
+import com.dl1991.feiyu.dafeiyu.FyAgent
+import com.dl1991.feiyu.dafeiyu.FyTakeover
 import com.dl1991.feiyu.dafeiyu.FyDirector
 import com.dl1991.feiyu.dafeiyu.FyPlatforms
 import com.dl1991.feiyu.dafeiyu.LiveEvent
@@ -135,7 +138,11 @@ class MainActivity : ComponentActivity() {
         if (i.getBooleanExtra("ci_live", false) && !DfyLive.isLive()) {
             FyPlatforms.setSources(ctx, FyPlatforms.sources.value.copy(sim = true, simIntensity = 5))
             DfyLive.start(ctx, SurfMode.SURF, "鲸鱼为什么会唱歌", setOf("sim"))
+            // 真人接管 holds every line for approval; the smoke run lets them through so TTS/captions run end to end
+            if (i.getBooleanExtra("ci_autoapprove", false)) FyTakeover.setAutoApprove(true)
         }
+        if (i.getBooleanExtra("ci_stop", false)) DfyLive.stop(ctx, "CI 下播")
+        if (i.getBooleanExtra("ci_dump", false)) ciDump()
         when (i.getStringExtra("ci_director")) {
             "card" -> FyDirector.pushTopicCard("你见过最大的动物是什么？")
             "pin" -> FyDirector.pin(LiveEvent(EvType.COMMENT, "sim:3", "鲸鱼饲养员", "鱼鱼能讲讲座头鲸的歌吗？", source = "sim"))
@@ -143,6 +150,25 @@ class MainActivity : ComponentActivity() {
             "clear" -> { FyDirector.setStandby(false); FyDirector.clearTopicCard(); FyDirector.unpin() }
         }
     }
+}
+
+/** Debug: the 直播专家组 state + her life state into logcat (tag FeiyuCI) for the smoke test. */
+private fun ciDump() {
+    val ui = FyAgent.ui.value
+    val room = DfyLive.room.value
+    val life = FyAgent.lifeState.value
+    val l = mutableListOf<String>()
+    l += "room status=${room.status} topic=${room.topic} segment=${room.segment} pages=${room.pages} bubbles=${room.bubbles.size} queue=${room.queue} online=${room.online}"
+    l += "crew status=${ui.status} ticks=${ui.ticks} fallbacks=${ui.fallbacks} tokensHour=${ui.tokensHour}"
+    l += "thought=${ui.thought}"
+    l += "goal=${ui.goal} plan=${ui.plan.joinToString(" | ")}"
+    l += "results=${ui.results.joinToString(" | ")}"
+    CrewRole.values().forEach { r -> val n = ui.notes[r.id]; l += "role ${r.id} calls=${n?.calls ?: 0} fired=${n?.fired ?: 0} rules=${n?.viaRules} err=${n?.error.orEmpty()} note=${n?.text.orEmpty()}" }
+    room.bubbles.takeLast(8).forEach { b -> l += "bubble ${b.kind}: ${b.text.take(120)}" }
+    l += "life streams=${life.streams} minutes=${life.liveMinutes} goals=${life.goals.size} interests=${life.interests.take(5).joinToString { it.topic + ":" + it.weight.toInt() }} skills=${life.skills.size} relations=${life.relations.size} lessons=${life.lessons.joinToString(" / ")}"
+    l += "diary=${life.diary.lastOrNull()?.text.orEmpty()}"
+    l += "nextPlan=${life.nextPlan?.topics?.joinToString("、").orEmpty()} segs=${life.nextPlan?.segments?.joinToString { it.kind + it.minutes }.orEmpty()}"
+    l.forEach { android.util.Log.i("FeiyuCI", it) }
 }
 
 private fun go(nav: NavHostController, r: String) {
