@@ -77,6 +77,9 @@ data class ContentSettings(
     val filterMedical: Boolean = true,     // politics / adult / gambling are always on
     val blockKeywords: List<String> = emptyList(),
     val perViewerPerMin: Int = 6,          // comments per viewer per minute considered
+    // 真人接管: every line waits for the host's approval (抖音 requires a real person driving live)
+    val takeoverDouyin: Boolean = true,
+    val takeoverOthers: Boolean = false,
 ) {
     fun sanitized() = copy(
         segments = segments.map { it.copy(minutes = it.minutes.coerceIn(1, 120)) }.filter { it.kind in SegKind.ALL }.ifEmpty { DEFAULT_SEGMENTS },
@@ -109,6 +112,7 @@ data class ContentSettings(
         .put("catchphrases", JSONArray(catchphrases)).put("forbidden", JSONArray(forbidden))
         .put("layout", layout).put("subtitleSize", subtitleSize).put("ticker", ticker).put("streamPreset", streamPreset)
         .put("filterMedical", filterMedical).put("blockKeywords", JSONArray(blockKeywords)).put("perViewerPerMin", perViewerPerMin)
+        .put("takeoverDouyin", takeoverDouyin).put("takeoverOthers", takeoverOthers)
 
     companion object {
         val DEFAULT_SEGMENTS = listOf(
@@ -136,6 +140,7 @@ data class ContentSettings(
                 streamPreset = o.optString("streamPreset", d.streamPreset),
                 filterMedical = o.optBoolean("filterMedical", true), blockKeywords = strs(o.optJSONArray("blockKeywords")),
                 perViewerPerMin = o.optInt("perViewerPerMin", d.perViewerPerMin),
+                takeoverDouyin = o.optBoolean("takeoverDouyin", true), takeoverOthers = o.optBoolean("takeoverOthers", false),
             ).sanitized()
         }
 
@@ -220,7 +225,11 @@ object FyContentStore {
         write(File(dir(ctx), "presets.json"), JSONObject().apply { presets.value.forEach { (k, v) -> put(k, v.toJson()) } }.toString(2))
     }
 
-    fun loadPreset(ctx: Context, name: String) { allPresets()[name]?.let { set(ctx, it, name) } }
+    /** Presets never change the 真人接管 setting. */
+    fun loadPreset(ctx: Context, name: String) {
+        val cur = get(ctx)
+        allPresets()[name]?.let { set(ctx, it.copy(takeoverDouyin = cur.takeoverDouyin, takeoverOthers = cur.takeoverOthers), name) }
+    }
 
     private fun applyRuntime(c: ContentSettings) {
         DfySafety.medicalOn = c.filterMedical

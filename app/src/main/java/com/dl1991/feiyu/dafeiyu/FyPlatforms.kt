@@ -85,12 +85,24 @@ object FyPlatforms {
         return "$url/$key"
     }
 
-    /** 开播前检查: the 「AI 生成内容」 label is not a checkbox — it is always on. */
+    /** 开播前检查: the 「AI 生成」 watermark is not a checkbox — it is always on. */
     val CHECKLIST = listOf(
         "账号已完成实名认证，我本人对账号与直播内容负责。",
         "我已在所选平台获得推流（电脑 / 第三方）权限；推流码可能受账号等级、粉丝数等限制。",
         "我了解平台对「无人直播 / 录播 / 挂机」的处罚：直播时我在场看护，随时可以暂停或下播。",
-        "虚拟角色不冒充真人；画面与语音始终带「AI 生成内容」标识（本应用强制开启，不能关闭）。",
+        "虚拟角色不冒充真人；画面始终带「AI 生成」水印（本应用强制开启，不能关闭）。",
         "不讨论政治、色情、赌博，不给医疗 / 投资建议；违规内容由我负责处理。",
     )
+
+    /** Extra items for 抖音 (virtual-human streams must be real-name and driven live by a real person). Indices follow [CHECKLIST]. */
+    val DOUYIN_EXTRA = listOf(
+        "已实名认证",
+        "真人在场实时驱动（已开启真人接管）",
+    )
+
+    /** Items shown for [p]; checked state is stored by index, extras come after the shared ones. */
+    fun checklist(p: LivePlatform): List<String> = if (p == LivePlatform.DOUYIN) CHECKLIST + DOUYIN_EXTRA else CHECKLIST
+
+    /** Index of the 真人接管 item for 抖音. */
+    val TAKEOVER_ITEM: Int get() = CHECKLIST.size + 1
 }

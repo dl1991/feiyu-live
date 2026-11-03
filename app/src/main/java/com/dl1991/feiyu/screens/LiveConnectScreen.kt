@@ -26,7 +26,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.dl1991.feiyu.FyA11yService
 import com.dl1991.feiyu.dafeiyu.DfyRoutes
+import com.dl1991.feiyu.dafeiyu.FyContentStore
 import com.dl1991.feiyu.dafeiyu.FyPlatforms
+import com.dl1991.feiyu.dafeiyu.FyTakeover
 import com.dl1991.feiyu.dafeiyu.LivePlatform
 import com.dl1991.feiyu.ui.CheckMark
 import com.dl1991.feiyu.ui.ChipKind
@@ -39,6 +41,7 @@ import com.dl1991.feiyu.ui.FySectionHeader
 import com.dl1991.feiyu.ui.FySlider
 import com.dl1991.feiyu.ui.FySpacer
 import com.dl1991.feiyu.ui.FyToggle
+import com.dl1991.feiyu.ui.FyTokens
 import com.dl1991.feiyu.ui.FyType
 import com.dl1991.feiyu.ui.GlassField
 import com.dl1991.feiyu.ui.StatusChip
@@ -58,7 +61,12 @@ fun LiveConnectScreen(back: (() -> Unit)?, open: (String) -> Unit) {
     val endpointOk = remember(platform, rev) { FyPlatforms.endpoint(ctx) != null }
     var roomText by remember(src.biliRoom) { mutableStateOf(if (src.biliRoom > 0) src.biliRoom.toString() else "") }
     val a11yOn = remember(rev) { FyA11yService.isEnabled(ctx) }
-    val allChecked = FyPlatforms.CHECKLIST.indices.all { it in checked }
+    LaunchedEffect(Unit) { FyContentStore.ensure(ctx) }
+    val content by FyContentStore.state.collectAsState()
+    val items = FyPlatforms.checklist(platform)
+    val takeoverOk = platform != LivePlatform.DOUYIN || content.takeoverDouyin
+    fun itemOn(i: Int) = i in checked && (i != FyPlatforms.TAKEOVER_ITEM || platform != LivePlatform.DOUYIN || content.takeoverDouyin)
+    val allChecked = items.indices.all { itemOn(it) }
 
     FyScaffold("直播接入", back) {
         FySectionHeader("推流平台")
@@ -110,9 +118,10 @@ fun LiveConnectScreen(back: (() -> Unit)?, open: (String) -> Unit) {
 
         FySectionHeader("开播前检查")
         FyCard(padding = PaddingValues(12.dp)) {
-            FyPlatforms.CHECKLIST.forEachIndexed { i, line ->
-                val on = i in checked
-                Row(Modifier.fillMaxWidth().clickable { FyPlatforms.setChecklist(ctx, if (on) checked - i else checked + i) }.padding(vertical = 6.dp),
+            items.forEachIndexed { i, line ->
+                val on = itemOn(i)
+                val lockedOff = platform == LivePlatform.DOUYIN && i == FyPlatforms.TAKEOVER_ITEM && !content.takeoverDouyin
+                Row(Modifier.fillMaxWidth().clickable(enabled = !lockedOff) { FyPlatforms.setChecklist(ctx, if (i in checked) checked - i else checked + i) }.padding(vertical = 6.dp),
                     verticalAlignment = Alignment.Top) {
                     CheckMark(on, ringWhenOff = true)
                     Spacer(Modifier.width(10.dp))
@@ -120,13 +129,19 @@ fun LiveConnectScreen(back: (() -> Unit)?, open: (String) -> Unit) {
                 }
             }
             Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                StatusChip("AI 生成内容 · 始终开启", ChipKind.ACCENT)
+                StatusChip("「AI 生成」水印 · 始终开启", ChipKind.ACCENT)
+            }
+            if (!takeoverOk) {
+                Text("抖音要求虚拟人直播由真人实时驱动：请先在「直播内容 › 真人接管」或导播台开启真人接管。",
+                    Modifier.padding(top = 6.dp), fontSize = FyType.Secondary, color = FyTokens.warnColor())
+                Text("去开启 ›", Modifier.padding(top = 4.dp).clickable { FyTakeover.setEnabled(ctx, true) }, fontSize = FyType.Secondary)
             }
         }
 
         FySectionHeader("下一步")
         FyCard(padding = PaddingValues(12.dp)) {
             Text(when {
+                !takeoverOk -> "抖音需要开启真人接管后才能开播。"
                 !allChecked -> "勾选全部检查项后才能开播。"
                 !endpointOk -> "还没配置推流：可以先本地排练（不推流）。"
                 else -> "一切就绪，去直播间开播。"

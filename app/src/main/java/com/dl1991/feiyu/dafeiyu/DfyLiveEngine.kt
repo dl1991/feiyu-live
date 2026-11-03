@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -74,6 +76,8 @@ object DfyLive {
     private var scope: CoroutineScope? = null
     private var brain: Job? = null
     private var turnJob: Job? = null
+    private var speakJob: Job? = null                                     // 真人接管: an approved draft being spoken
+    private val speakLock = Mutex()                                       // one voice at a time
     @Volatile private var turnIsFiller = false
     private var conv = ConversationManager()
     private val sources = mutableListOf<LiveEventSource>()
@@ -96,7 +100,21 @@ object DfyLive {
         s.mode == SurfMode.LEARN || appCtx?.let { FyDirector.segment(FyContentStore.get(it)).kind == SegKind.LEARN } == true
 
     /** 导播台: stop the current sentence now (pause / standby). */
-    fun interruptSpeech() { turnJob?.cancel(); DfySpeaker.interrupt() }
+    fun interruptSpeech() { turnJob?.cancel(); speakJob?.cancel(); DfySpeaker.interrupt() }
+
+    /** 真人说话 pressed: stop her voice now. In takeover mode a draft being written keeps going (it only lands in the queue). */
+    fun pauseForHuman() {
+        speakJob?.cancel()
+        val ctx = appCtx
+        if (ctx == null || !FyTakeover.active(ctx)) turnJob?.cancel()
+        DfySpeaker.interrupt()
+    }
+
+    /** The host just spoke (push-to-talk released): restart the 冷场 clock. */
+    fun noteHumanSpoke() { lastSpokeAt = System.currentTimeMillis() }
+
+    /** A draft was skipped: restart the 冷场 clock so a new filler is not drafted instantly. */
+    fun noteSkipped() { lastSpokeAt = System.currentTimeMillis() }
 
     // ------------------------------------------------------------------ control
 
@@ -112,7 +130,7 @@ object DfyLive {
         val s = SurfSession(UUID.randomUUID().toString().take(10), mode, clean(topic, 60), "", System.currentTimeMillis(), startedBy = by)
         session = s
         sources.clear(); rate.clear()
-        FyDirector.reset(); FyContentStore.ensure(app); FyPlatforms.ensure(app)
+        FyDirector.reset(); FyContentStore.ensure(app); FyPlatforms.ensure(app); FyTakeover.reset()
         lastPollAt = System.currentTimeMillis(); lastQuizAt = lastPollAt
         val srcCfg = FyPlatforms.sources.value
         if ("sim" in sourceIds) sources += SimulatedViewers(srcCfg.simIntensity)
@@ -124,6 +142,7 @@ object DfyLive {
             segment = FyDirector.segment(FyContentStore.get(app)).title)
         sources.forEach { it.start(sc) }
         sc.launch { DfyEventBus.events.collect { onEvent(app, it) } }
+        sc.launch { for (d in FyTakeover.approved) speakApproved(app, d) } // 真人接管: speak what the host approved, in order
         brain = sc.launch { runBrain(app) }
     }
 
@@ -133,7 +152,9 @@ object DfyLive {
         if (state.value.status == "ending" || state.value.status == "off") return
         state.value = state.value.copy(status = "ending", note = reason)
         sc.launch {
-            brain?.cancelAndJoin(); turnJob?.cancelAndJoin(); DfySpeaker.interrupt()
+            FyHumanVoice.stop()
+            brain?.cancelAndJoin(); turnJob?.cancelAndJoin(); speakJob?.cancelAndJoin(); DfySpeaker.interrupt()
+            FyTakeover.reset()
             sources.forEach { it.stop() }
             runCatching { finishSession(ctx.applicationContext, reason) }.onFailure { Log.w(TAG, "recap: ${it.message}") }
             DfySpeaker.idle()
@@ -228,7 +249,9 @@ object DfyLive {
             val now = System.currentTimeMillis()
             budgetStop(ctx)?.let { why -> wrapUp(ctx, why); return }
             val dir = FyDirector.state.value
-            if (dir.standby || dir.voicePaused) { lastSpokeAt = now; delay(300); continue } // 导播台 holds her
+            if (dir.standby || dir.voicePaused || FyHumanVoice.talking.value) { lastSpokeAt = now; delay(300); continue } // 导播台 / 真人说话 holds her
+            val drafting = FyTakeover.active(ctx)
+            if (drafting && FyTakeover.pendingCount() >= FyTakeover.MAX_PENDING) { lastSpokeAt = now; delay(300); continue } // host is behind: stop drafting
             val cmd = FyDirector.queue.poll()
             if (cmd != null) { directorCmd(ctx, cmd); continue }
             val seg = FyDirector.tick(ctx, now)
@@ -237,7 +260,8 @@ object DfyLive {
             val item = conv.next(now)
             state.value = state.value.copy(queue = conv.size(), poll = conv.poll, quiz = conv.quiz, guess = conv.guess)
             if (item != null) { respond(ctx, item); continue }
-            if (now - lastSpokeAt > idleGap(ctx) && !DfySpeaker.speaking.value) { filler(ctx); continue }
+            val quiet = !DfySpeaker.speaking.value && (!drafting || (FyTakeover.pendingCount() == 0 && speakJob?.isActive != true))
+            if (now - lastSpokeAt > idleGap(ctx) && quiet) { filler(ctx); continue } // in takeover mode the filler is only a draft
             delay(200)
         }
     }
@@ -288,7 +312,14 @@ object DfyLive {
     }
 
     private suspend fun wrapUp(ctx: Context, why: String) {
-        turn(ctx, null, "[下播] $why。用两三句话自然地跟大家道别，提一下今天最有意思的一个发现。", filler = false)
+        val prompt = "[下播] $why。用两三句话自然地跟大家道别，提一下今天最有意思的一个发现。"
+        if (FyTakeover.active(ctx)) {
+            session?.let { addBubble(it, Bubble(System.currentTimeMillis(), "system", "$why：下播词已放进待审队列，审核后下播（最多等 2 分钟）")) }
+            val before = FyTakeover.drafts.value.map { it.id }.toSet()
+            turn(ctx, null, prompt, filler = false)
+            val d = FyTakeover.drafts.value.firstOrNull { it.id !in before }
+            if (d != null) withTimeoutOrNull(120_000) { d.done.await() }
+        } else turn(ctx, null, prompt, filler = false)
         stop(ctx, why)
     }
 
@@ -366,6 +397,7 @@ object DfyLive {
 
     private suspend fun respond(ctx: Context, item: ConvItem) {
         if (item.kind == "safety" && item.note == "self_harm") { // fixed text, no model, highest priority
+            if (FyTakeover.active(ctx)) { FyTakeover.add("安全回复（固定话术）", DfySafety.SELF_HARM_REPLY, emptyList(), "reply", urgent = true); return }
             speakFixed(ctx, DfySafety.SELF_HARM_REPLY, Expr.SAD); return
         }
         val st = DfyStore.snapshot(ctx)
@@ -431,11 +463,12 @@ object DfyLive {
             if (learning(s)) DfyKnowledge.lookup(st, s.topic + " " + userPrompt, 4).takeIf { it.isNotEmpty() }?.let { n -> append("【笔记】").append(n.joinToString("；") { it.text }).append('\n') }
             append("观众指挥服从度：${st.settings.surfViewerObedience}/100。")
         }
+        if (FyTakeover.active(ctx)) { draft(ctx, item, userPrompt, filler, sys, st, content); return } // 真人接管: write it, don't say it
         val bubbleAt = System.currentTimeMillis()
         val kind = if (filler) "thought" else "reply"
         state.value = state.value.copy(thinking = true)
         turnIsFiller = filler
-        val job = sc.launch {
+        val job = sc.launch { speakLock.withLock {
             val speech = SpeechPipeline(ctx, this) { firstAudioAt ->
                 if (!filler || item != null) recordLatency(firstAudioAt - eventAt)
             }
@@ -463,13 +496,114 @@ object DfyLive {
                 exchanges.addLast("$who → 我：${clean(spoken.toString(), 50)}"); while (exchanges.size > 12) exchanges.removeFirst()
             }
             applyTags(ctx, tags)
-        }
+        } }
         turnJob = job
         job.join()
         turnIsFiller = false
         lastSpokeAt = System.currentTimeMillis()
         DfySpeaker.idle()
         state.value = state.value.copy(thinking = false, subtitle = "")
+        publishSession()
+    }
+
+    // ------------------------------------------------------------------ 真人接管
+
+    /** Draft a turn into the approval queue: same prompt, same safety, nothing is spoken. */
+    private suspend fun draft(ctx: Context, item: ConvItem?, userPrompt: String, filler: Boolean, sys: String, st: DfyState, content: ContentSettings) {
+        val sc = scope ?: return
+        state.value = state.value.copy(thinking = true, note = "起草中，等你审核…")
+        val job = sc.launch {
+            val chunker = Chunker()
+            val out = StringBuilder()
+            var blocked = false
+            fun add(sentence: String) {
+                if (blocked) return
+                if (DfySafety.blocksOutgoing(sentence)) { blocked = true; out.setLength(0); out.append(DfySafety.DEFLECT); return }
+                DfySafety.scrubForbidden(sentence).takeIf { it.isNotBlank() }?.let { out.append(it) }
+            }
+            var tags = emptyList<String>()
+            try {
+                count(sys.length + userPrompt.length)
+                DfyLlm.stream(ctx, sys, listOf(LLMMessage(role = LLMMessage.Role.USER, content = userPrompt)), content.maxTokens, 0.95, st.settings.preferFreeModels) { delta ->
+                    chunker.feed(delta).forEach { add(it) }
+                }
+                chunker.flush().forEach { add(it) }
+                tags = chunker.tags.toList()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "draft: ${e.message}")
+                add(fallbackLine(item))
+            }
+            val text = out.toString().trim()
+            if (text.isNotBlank()) FyTakeover.add(draftSource(item, userPrompt), text, tags, if (filler) "thought" else "reply")
+        }
+        turnJob = job
+        job.join()
+        state.value = state.value.copy(thinking = false, note = "")
+        publishSession()
+    }
+
+    /** What a draft answers, for the 导播台 queue. */
+    private fun draftSource(item: ConvItem?, prompt: String): String {
+        if (item != null) {
+            val e = item.events.firstOrNull()
+            val nicks = item.events.distinctBy { it.userKey }.take(3).joinToString("、") { it.nick }
+            return when (item.kind) {
+                "greet" -> "进场：$nicks"
+                "thanks_like" -> "点赞：$nicks"
+                "thanks_follow" -> "关注：$nicks"
+                "gift" -> "礼物：${e?.nick.orEmpty()} ${e?.giftName.orEmpty()}×${e?.giftCount ?: 1}"
+                "poll_result" -> "投票结束"
+                "quiz_answer" -> "答题：${e?.nick.orEmpty()}"
+                "guess_win" -> "猜谜：${e?.nick.orEmpty()}"
+                "safety" -> "敏感弹幕（婉拒）：${e?.nick.orEmpty()}"
+                else -> {
+                    val n = item.events.distinctBy { it.userKey }.size
+                    "${e?.nick.orEmpty()}：${clean(e?.text, 60)}" + if (n > 1) "（等 $n 人）" else ""
+                }
+            }
+        }
+        val tag = Regex("^\\[(.+?)]").find(prompt)?.groupValues?.get(1).orEmpty()
+        return when (tag) {
+            "空档" -> if (prompt.contains("[[GO") || prompt.contains("[[SEARCH")) "冷场补位 · 冲浪解说" else "冷场补位"
+            "换页" -> "冲浪解说"
+            "开播" -> "开场"
+            "换环节" -> "换环节"
+            "导播" -> "导播：换话题"
+            "话题卡" -> "话题卡"
+            "置顶弹幕" -> "置顶弹幕"
+            "下播" -> "下播"
+            else -> tag.ifBlank { "自言自语" }
+        }
+    }
+
+    /** Speak a draft the host approved (说 / 改后说), then apply its tags. */
+    private suspend fun speakApproved(ctx: Context, d: Draft) {
+        val sc = scope ?: run { d.done.complete(false); return }
+        while (FyHumanVoice.talking.value || FyDirector.state.value.standby || FyDirector.state.value.voicePaused) delay(200)
+        if (session == null) { d.done.complete(false); return }
+        val bubbleAt = System.currentTimeMillis()
+        if (d.urgent) faceOverride = Expr.SAD to System.currentTimeMillis() + 15_000
+        val job = sc.launch {
+            speakLock.withLock {
+                val speech = SpeechPipeline(ctx, this) {}
+                val chunker = Chunker()
+                val spoken = StringBuilder()
+                for (p in chunker.feed(d.text) + chunker.flush()) { spoken.append(p); say(speech, p, bubbleAt, d.kind, spoken) }
+                speech.close()
+                speech.awaitDone()
+            }
+        }
+        speakJob = job
+        job.join()
+        speakJob = null
+        exchanges.addLast("${d.source} → 我：${clean(d.text, 50)}"); while (exchanges.size > 12) exchanges.removeFirst()
+        lastSpokeAt = System.currentTimeMillis()
+        DfySpeaker.idle()
+        state.value = state.value.copy(subtitle = "")
+        d.done.complete(true)
+        if (!job.isCancelled) runCatching { applyTags(ctx, d.tags) }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         publishSession()
     }
 

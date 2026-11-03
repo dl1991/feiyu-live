@@ -25,6 +25,7 @@ import com.dl1991.feiyu.Routes
 import com.dl1991.feiyu.dafeiyu.ContentSettings
 import com.dl1991.feiyu.dafeiyu.DfyRoutes
 import com.dl1991.feiyu.dafeiyu.FyContentStore
+import com.dl1991.feiyu.dafeiyu.FyTakeover
 import com.dl1991.feiyu.dafeiyu.SegKind
 import com.dl1991.feiyu.dafeiyu.StreamPreset
 import com.dl1991.feiyu.dafeiyu.Segment
@@ -39,6 +40,7 @@ import com.dl1991.feiyu.ui.FySectionHeader
 import com.dl1991.feiyu.ui.FySlider
 import com.dl1991.feiyu.ui.FySpacer
 import com.dl1991.feiyu.ui.FyToggle
+import com.dl1991.feiyu.ui.FyTokens
 import com.dl1991.feiyu.ui.FyType
 import com.dl1991.feiyu.ui.GlassField
 import com.dl1991.feiyu.ui.StatusChip
@@ -95,6 +97,20 @@ fun ContentScreen(back: (() -> Unit)?, open: (String) -> Unit) {
             FyToggle("到时自动切换环节", c.autoRotate) { on -> set { it.copy(autoRotate = on) } }
             Text("合计 ${c.enabledSegments.sumOf { it.minutes }} 分钟", fontSize = FyType.Secondary)
         }
+
+        FySectionHeader("真人接管", actionLabel = "导播台", onAction = { open(DfyRoutes.DIRECTOR) })
+        FyCard(padding = PaddingValues(12.dp)) {
+            FyToggle("抖音：真人接管模式", c.takeoverDouyin, sub = "她只起草回复，每句话都要你在导播台点「说」才会说出来（默认开启）") { on ->
+                set { it.copy(takeoverDouyin = on) }
+                if (on) FyTakeover.setAutoApprove(false)
+            }
+            FyToggle("其他平台：真人接管模式", c.takeoverOthers, sub = "B站 / 快手 / 视频号 推流时同样逐句审核") { on ->
+                set { it.copy(takeoverOthers = on) }
+                if (on) FyTakeover.setAutoApprove(false)
+            }
+            if (!c.takeoverDouyin) Text("抖音规定虚拟人直播需实名并由真人实时驱动，完全由 AI 自动说话会被处罚。", fontSize = FyType.Secondary, color = FyTokens.warnColor())
+        }
+        FyFootnote("冷场补位、冲浪解说、换环节过渡也都进入待审队列。导播台里还可以按住「真人说话」直接用麦克风说。")
 
         FySectionHeader("主题与来源")
         FyCard(padding = PaddingValues(12.dp)) {

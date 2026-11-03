@@ -34,6 +34,7 @@ import com.dl1991.feiyu.dafeiyu.DfyVoiceConfig
 import com.dl1991.feiyu.dafeiyu.Expr
 import com.dl1991.feiyu.dafeiyu.FyContentStore
 import com.dl1991.feiyu.dafeiyu.FyPlatforms
+import com.dl1991.feiyu.dafeiyu.LivePlatform
 import com.dl1991.feiyu.dafeiyu.SurfMode
 import com.dl1991.feiyu.dafeiyu.WhaleAvatar
 import com.dl1991.feiyu.llm.FyProviders
@@ -69,7 +70,7 @@ fun HomeScreen(open: (String) -> Unit) {
     val live = room.status != "off"
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(bottom = 20.dp)) {
-        FyPageTitle("大肥鱼直播", kicker = "FEIYU LIVE · v0.1", subtitle = "AI 虚拟主播：冲浪、学知识、和弹幕聊天")
+        FyPageTitle("大肥鱼直播", kicker = "FEIYU LIVE · v0.2", subtitle = "AI 虚拟主播：冲浪、学知识、和弹幕聊天")
         FyCard(padding = PaddingValues(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.background(FyTokens.tile(), FyTokens.RowShape)) { WhaleAvatar(if (live) room.expression else Expr.forMood(m.mood, m.intensity, m.energy), 84.dp) }
@@ -114,8 +115,11 @@ fun HomeScreen(open: (String) -> Unit) {
             Indicator(if (sources.ids().isEmpty()) null else true, "弹幕来源", buildList {
                 if (sources.sim) add("模拟观众"); if (sources.bili && sources.biliRoom > 0) add("B站 ${sources.biliRoom}"); if (sources.douyinA11y) add("抖音无障碍"); add("手动")
             }.joinToString("、"))
-            Indicator(if (checks.size == FyPlatforms.CHECKLIST.size) true else null, "开播检查", "${checks.size}/${FyPlatforms.CHECKLIST.size} 已确认")
-            Indicator(true, "AI 标识", "「AI 生成内容」始终显示（强制）")
+            FyPlatforms.checklist(platform).let { items -> val n = items.indices.count { it in checks }; Indicator(if (n == items.size) true else null, "开播检查", "$n/${items.size} 已确认") }
+            Indicator(true, "AI 标识", "「AI 生成」水印始终显示（强制）")
+            val takeover = if (platform == LivePlatform.DOUYIN) content.takeoverDouyin else content.takeoverOthers
+            Indicator(if (takeover) true else if (platform == LivePlatform.DOUYIN) false else null, "真人接管",
+                if (takeover) "开启：每句话由你审核后才说" else if (platform == LivePlatform.DOUYIN) "关闭：抖音要求真人实时驱动，请开启" else "关闭")
         }
         FySectionHeader("直播内容", actionLabel = "调整", onAction = { open("tab/content") })
         FyCard {

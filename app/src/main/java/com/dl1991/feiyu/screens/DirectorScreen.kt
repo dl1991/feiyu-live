@@ -1,6 +1,19 @@
 package com.dl1991.feiyu.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,6 +40,11 @@ import com.dl1991.feiyu.dafeiyu.DfyRoutes
 import com.dl1991.feiyu.dafeiyu.EvType
 import com.dl1991.feiyu.dafeiyu.FyContentStore
 import com.dl1991.feiyu.dafeiyu.FyDirector
+import com.dl1991.feiyu.dafeiyu.FyHumanVoice
+import com.dl1991.feiyu.dafeiyu.FyPlatforms
+import com.dl1991.feiyu.dafeiyu.FyTakeover
+import com.dl1991.feiyu.dafeiyu.LivePlatform
+import com.dl1991.feiyu.ui.FyTokens
 import com.dl1991.feiyu.ui.ChipKind
 import com.dl1991.feiyu.ui.FyButton
 import com.dl1991.feiyu.ui.FyCard
@@ -59,6 +77,16 @@ fun DirectorScreen(back: () -> Unit, open: (String) -> Unit) {
     var card by remember { mutableStateOf("") }
     var standbyText by remember(dir.standbyText) { mutableStateOf(dir.standbyText) }
     val live = room.status == "live"
+    LaunchedEffect(Unit) { FyPlatforms.ensure(ctx) }
+    val platform by FyPlatforms.selected.collectAsState()
+    val drafts by FyTakeover.drafts.collectAsState()
+    val autoApprove by FyTakeover.autoApprove.collectAsState()
+    val talking by FyHumanVoice.talking.collectAsState()
+    val takeover = if (platform == LivePlatform.DOUYIN) c.takeoverDouyin else c.takeoverOthers
+    var editing by remember { mutableStateOf<Long?>(null) }
+    var editText by remember { mutableStateOf("") }
+    var micDenied by remember { mutableStateOf(false) }
+    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> micDenied = !ok }
 
     fun set(f: (ContentSettings) -> ContentSettings) = FyContentStore.update(ctx, f)
 
@@ -77,6 +105,54 @@ fun DirectorScreen(back: () -> Unit, open: (String) -> Unit) {
             if (room.pageTitle.isNotBlank()) Text("网页：${room.pageTitle}", fontSize = FyType.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (dir.lastAction.isNotBlank()) Text("上一步：${dir.lastAction}", fontSize = FyType.Caption)
             if (!live) { FySpacer(8.dp); FyButton("去直播间开播", { open(DfyRoutes.LIVE) }, tonal = true) }
+        }
+
+        // ---- 真人接管
+        DriveBanner(takeover, autoApprove, talking)
+        FySectionHeader("真人接管 · ${platform.label}")
+        FyCard(padding = PaddingValues(12.dp)) {
+            FyToggle("真人接管模式", takeover, sub = "她只起草，你点「说」她才说（冷场补位、冲浪解说也要审核）") { FyTakeover.setEnabled(ctx, it) }
+            FyToggle("自动通过（紧急开关）", autoApprove, enabled = takeover,
+                sub = if (autoApprove) "已开启：草稿不经审核直接说出 —— 抖音不允许无人驱动，用完请关闭" else "关闭：每句都等你审核（推荐）") { FyTakeover.setAutoApprove(it) }
+            FySpacer(8.dp)
+            PushToTalk(talking) { pressed ->
+                if (pressed) {
+                    if (!FyHumanVoice.hasPermission(ctx)) { micPerm.launch(Manifest.permission.RECORD_AUDIO); false }
+                    else FyHumanVoice.start(ctx)
+                } else { FyHumanVoice.stop(); true }
+            }
+            Text(if (micDenied) "需要麦克风权限才能用「真人说话」。" else "按住说话：麦克风声音直接进直播，鱼鱼的嘴跟着你的音量动，AI 暂停；松开恢复。",
+                Modifier.padding(top = 6.dp), fontSize = FyType.Caption, color = if (micDenied) FyTokens.warnColor() else Color.Unspecified)
+        }
+
+        if (takeover) {
+            FySectionHeader("待审回复 · ${drafts.size}")
+            FyCard(padding = PaddingValues(12.dp)) {
+                if (drafts.isEmpty()) Text(if (live) "暂时没有草稿。有弹幕或冷场时，她起草的话会出现在这里。" else "开播后，她起草的每句话会先出现在这里，等你决定。", fontSize = FyType.Secondary)
+                drafts.forEachIndexed { i, d ->
+                    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (d.urgent) StatusChip("紧急", ChipKind.ERR)
+                            Text(d.source, Modifier.weight(1f), fontSize = FyType.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text("→ ${d.text}", Modifier.padding(vertical = 4.dp), fontSize = FyType.Body)
+                        if (editing == d.id) {
+                            GlassField(editText, { editText = it.take(300) }, "改后说", singleLine = false, minLines = 2)
+                            FySpacer(6.dp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FyButton("说出修改", { FyTakeover.approve(d.id, editText); editing = null }, enabled = editText.isNotBlank())
+                                FyButton("取消", { editing = null }, tonal = true)
+                            }
+                        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FyButton("说", { FyTakeover.approve(d.id, null) })
+                            FyButton("改后说", { editing = d.id; editText = d.text }, tonal = true)
+                            FyButton("跳过", { FyTakeover.skip(d.id) }, tonal = true)
+                        }
+                    }
+                    if (i < drafts.lastIndex) Box(Modifier.fillMaxWidth().padding(vertical = 2.dp).heightIn(min = 1.dp).background(FyTokens.hairline()))
+                }
+            }
+            FyFootnote("最多积压 ${FyTakeover.MAX_PENDING} 条，满了她会先停下不再起草。跳过的回复不会执行其中的换页 / 投票等动作。")
         }
 
         // ---- voice / picture toggles
@@ -156,5 +232,48 @@ fun DirectorScreen(back: () -> Unit, open: (String) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** 「真人驱动中」 indicator at the top of the 导播台. */
+@Composable
+private fun DriveBanner(takeover: Boolean, autoApprove: Boolean, talking: Boolean) {
+    val (text, color) = when {
+        talking -> "真人说话中 · 麦克风直通直播" to FyTokens.errColor()
+        takeover && !autoApprove -> "真人驱动中 · 每句话由你审核" to FyTokens.okColor()
+        takeover -> "自动通过中 · AI 正在自动说话" to FyTokens.warnColor()
+        else -> "真人接管已关闭 · AI 自动说话" to FyTokens.warnColor()
+    }
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+            .background(color.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+            .border(1.dp, color, RoundedCornerShape(6.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(10.dp).background(color, RoundedCornerShape(50)))
+            Text(text, fontSize = FyType.Body, fontWeight = FontWeight.Bold, color = color)
+        }
+    }
+}
+
+/** Hold-to-talk button. [onPress] gets true on press (return false if the mic could not start) and false on release. */
+@Composable
+private fun PushToTalk(talking: Boolean, onPress: (Boolean) -> Boolean) {
+    val bg = if (talking) FyTokens.errColor() else FyTokens.accent()
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            .background(bg, RoundedCornerShape(8.dp))
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    if (onPress(true)) {
+                        tryAwaitRelease()
+                        onPress(false)
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (talking) "松开 · 结束真人说话" else "按住 · 真人说话", color = Color.White, fontSize = FyType.Title, fontWeight = FontWeight.Bold)
     }
 }

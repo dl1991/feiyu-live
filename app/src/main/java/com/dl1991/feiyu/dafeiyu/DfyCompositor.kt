@@ -24,7 +24,8 @@ enum class StreamPreset(val label: String, val w: Int, val h: Int, val fps: Int,
 
 /**
  * Builds each frame of the stream canvas (portrait):
- *   top bar (name · live dot · 「AI 生成内容」 label, always on) + topic trail
+ *   top bar (name · live dot) + topic trail; fixed 「AI 生成」 corner watermark drawn last, on top of every layout
+ *   and the standby card (hard-coded — there is no setting that turns it off)
  *   browsing area (snapshot of the shared WebView)
  *   avatar (expression + blink + breathing + TTS lip-sync) | comment ticker
  *   subtitle bar (what she is saying) + footer disclaimer.
@@ -32,6 +33,7 @@ enum class StreamPreset(val label: String, val w: Int, val h: Int, val fps: Int,
  * thread at a lower rate (≈6 fps) and reused between frames.
  */
 class DfyCompositor(val w: Int, val h: Int) {
+    companion object { const val WATERMARK = "AI 生成" }
     private val s = w / 720f
     private val frame = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(frame)
@@ -52,6 +54,10 @@ class DfyCompositor(val w: Int, val h: Int) {
     private val labelText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 22f * s; isFakeBoldText = true }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xEC, 0x4B, 0x4B) }
     private val webPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    // 「AI 生成」 watermark: readable size, semi-opaque dark backing + thin outline, fixed top-right corner.
+    private val wmBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(165, 0, 0, 0) }
+    private val wmEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 255, 255, 255); style = Paint.Style.STROKE; strokeWidth = 2f * s }
+    private val wmText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 30f * s; isFakeBoldText = true }
 
     /** Ask the main thread for a fresh WebView snapshot (skipped if one is in flight). */
     fun requestWebSnapshot() {
@@ -82,9 +88,27 @@ class DfyCompositor(val w: Int, val h: Int) {
 
     /**
      * Layout follows 直播内容 › 画面: web_big (网页大 + 鱼小), fish_big (鱼大 + 网页小), chat_only (纯聊天).
-     * 「AI 生成内容」 label is drawn in every layout, including the standby card.
+     * The 「AI 生成」 watermark is drawn last in every layout, including the standby card.
      */
     fun render(): Bitmap {
+        draw()
+        watermark(canvas)
+        return frame
+    }
+
+    /** Fixed corner watermark. Not tied to any setting — always drawn, always on top. */
+    private fun watermark(c: Canvas) {
+        val tag = WATERMARK
+        val tw = wmText.measureText(tag)
+        val m = 18f * s
+        val r = RectF(w - m - tw - 32 * s, m, w - m, m + 52 * s)
+        c.drawRoundRect(r, 12 * s, 12 * s, wmBg)
+        c.drawRoundRect(r, 12 * s, 12 * s, wmEdge)
+        val fm = wmText.fontMetrics
+        c.drawText(tag, r.left + 16 * s, r.centerY() - (fm.ascent + fm.descent) / 2, wmText)
+    }
+
+    private fun draw() {
         val st = DfyLive.state.value
         val cs = FyContentStore.state.value
         val dir = FyDirector.state.value
@@ -96,11 +120,7 @@ class DfyCompositor(val w: Int, val h: Int) {
         // top bar
         c.drawCircle(pad + 10 * s, 52 * s, 9 * s, dot)
         c.drawText("大肥鱼 · ${st.segment.ifBlank { if (st.mode == SurfMode.LEARN) "学知识" else "冲浪" }}", pad + 30 * s, 62 * s, title)
-        val tag = "AI 生成内容"
-        val tw = labelText.measureText(tag)
-        val lr = RectF(w - pad - tw - 24 * s, 30 * s, w - pad, 72 * s)
-        c.drawRoundRect(lr, 10 * s, 10 * s, label); c.drawText(tag, lr.left + 12 * s, lr.bottom - 13 * s, labelText)
-        if (dir.standby) { standby(c, dir.standbyText, t, pad); return frame }
+        if (dir.standby) { standby(c, dir.standbyText, t, pad); return }
         val trail = (st.trail.takeLast(4).joinToString("  ›  ").ifBlank { st.topic }).let { TextUtils.ellipsize(it, small, w - 2 * pad, TextUtils.TruncateAt.START).toString() }
         c.drawText(trail, pad, 104 * s, small)
         val subTop: Float
@@ -160,7 +180,6 @@ class DfyCompositor(val w: Int, val h: Int) {
             c.save(); c.clipRect(sb); c.translate(sb.left + 20 * s, sb.top + maxOf(0f, (sb.height() - layout.height) / 2)); layout.draw(c); c.restore()
         }
         c.drawText("虚拟角色「大肥鱼」· 画面与语音由 AI 实时生成", pad, h - 26 * s, small)
-        return frame
     }
 
     private fun drawWeb(c: Canvas, area: RectF, st: RoomState) {
