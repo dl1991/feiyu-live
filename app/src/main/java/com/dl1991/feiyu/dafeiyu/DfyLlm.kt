@@ -28,8 +28,12 @@ object DfyLlm {
         temperature: Double? = 0.8,
         preferFree: Boolean = true,
         @Suppress("UNUSED_PARAMETER") origin: String = "dafeiyu",
+        /** Provider id to try first (直播专家组: a model per expert); others stay as fallback. */
+        prefer: String? = null,
     ): String = withContext(Dispatchers.IO) {
-        val cands = FyProviders.candidates(ctx, preferFree).take(3)
+        var all = FyProviders.candidates(ctx, preferFree)
+        if (!prefer.isNullOrBlank()) all.find { it.id == prefer }?.let { f -> all = listOf(f) + all.filter { it.id != prefer } }
+        val cands = all.take(3)
         if (cands.isEmpty()) throw NoModel()
         var lastErr: String? = null
         for (p in cands) {

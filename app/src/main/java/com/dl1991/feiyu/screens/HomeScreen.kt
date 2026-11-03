@@ -70,7 +70,7 @@ fun HomeScreen(open: (String) -> Unit) {
     val live = room.status != "off"
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(bottom = 20.dp)) {
-        FyPageTitle("大肥鱼直播", kicker = "FEIYU LIVE · v0.3", subtitle = "AI 虚拟主播：冲浪、学知识、和弹幕聊天")
+        FyPageTitle("大肥鱼直播", kicker = "FEIYU LIVE · v0.4", subtitle = "AI 虚拟主播：冲浪、学知识、和弹幕聊天")
         FyCard(padding = PaddingValues(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.background(FyTokens.tile(), FyTokens.RowShape)) { WhaleAvatar(if (live) room.expression else Expr.forMood(m.mood, m.intensity, m.energy), 84.dp) }

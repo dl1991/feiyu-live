@@ -73,14 +73,32 @@ class SimulatedViewers(private val intensity: Int = 2) : LiveEventSource {
         "director" to listOf("带我们去看看维基百科的鲸鱼", "搜一下 今天的新闻", "去B站看看热门", "投票：看游戏还是看科技", "考考我们今天学的"),
     )
 
+    /** Topics each style perks up at (so the 复盘官 sees real differences in engagement per topic). */
+    private val likes = mapOf(
+        "question" to listOf("鲸", "海", "动物", "美食"), "cheer" to listOf("游戏", "音乐", "B站"), "regular" to listOf("鲸", "海洋", "鱼"),
+        "nerd" to listOf("AI", "科技", "GitHub", "原理", "编程"), "tease" to listOf("游戏", "八卦"), "director" to listOf("学", "知识", "历史", "科学"),
+    )
+    private val answers = listOf("我觉得是第一个", "当然是鲸鱼啊", "没想过诶", "我选科技", "哈哈我也想知道", "上次说过了吧", "这个我知道！", "看心情")
+
     override fun start(scope: CoroutineScope) {
         if (job?.isActive == true) return
         job = scope.launch {
             val present = mutableSetOf<Fake>()
             while (isActive) {
-                delay((6000L / intensity.coerceIn(1, 5)) + Random.nextLong(0, 5000))
+                val topic = SimCue.topic
+                val hot = topic.isNotBlank() && present.any { f -> likes[f.style].orEmpty().any { topic.contains(it, ignoreCase = true) } }
+                delay(((6000L / intensity.coerceIn(1, 5)) + Random.nextLong(0, 5000)).let { if (hot) it * 6 / 10 else it })
                 val f = crowd.random()
                 if (f !in present) { present += f; DfyEventBus.emit(LiveEvent(EvType.ENTER, f.key, f.nick, source = id)); continue }
+                // react to what she just did: vote in her poll, answer her question
+                val opts = SimCue.pollOptions
+                if (opts > 0 && Random.nextInt(2) == 0) { DfyEventBus.emit(LiveEvent(EvType.COMMENT, f.key, f.nick, text = (1 + Random.nextInt(opts)).toString(), source = id)); continue }
+                if (SimCue.question.isNotBlank() && System.currentTimeMillis() - SimCue.questionAt < 40_000 && Random.nextInt(3) == 0) {
+                    DfyEventBus.emit(LiveEvent(EvType.COMMENT, f.key, f.nick, text = answers.random(), source = id)); continue
+                }
+                if (hot && f.style != "rude" && Random.nextInt(4) == 0) {
+                    DfyEventBus.emit(LiveEvent(EvType.COMMENT, f.key, f.nick, text = "${topic.take(8)}这个我喜欢！再多讲点", source = id)); continue
+                }
                 when (Random.nextInt(20)) {
                     0 -> DfyEventBus.emit(LiveEvent(EvType.GIFT, f.key, f.nick, giftName = listOf("小心心", "玫瑰", "棒棒糖", "嘉年华").random(), giftCount = 1 + Random.nextInt(3), giftValue = listOf(1, 1, 10, 3000).random(), source = id))
                     1, 2 -> DfyEventBus.emit(LiveEvent(EvType.LIKE, f.key, f.nick, giftCount = 1 + Random.nextInt(30), source = id))

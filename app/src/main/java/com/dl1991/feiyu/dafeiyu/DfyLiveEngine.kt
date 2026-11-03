@@ -95,6 +95,18 @@ object DfyLive {
     private var lastPollAt = 0L
     private var lastQuizAt = 0L
 
+    // ---- 直播专家组 (agent mode)
+    private var crew: FyCrew? = null
+    private val inbox = LinkedHashMap<String, ConvItem>()                  // unanswered items the crew can reply to, by "c<id>"
+    private var inboxDirty = false
+    private var lastTickAt = 0L
+    @Volatile private var restUntil = 0L
+    @Volatile private var agentEnd: String? = null
+    private var readOffset = 0
+    private var presentAtTick = 0
+
+    private fun agentOn(ctx: Context) = crew != null && FyAgent.config(ctx).agentOn
+
     /** Learning happens in 学知识 mode or during a 学知识 segment. */
     private fun learning(s: SurfSession): Boolean =
         s.mode == SurfMode.LEARN || appCtx?.let { FyDirector.segment(FyContentStore.get(it)).kind == SegKind.LEARN } == true
@@ -131,6 +143,11 @@ object DfyLive {
         session = s
         sources.clear(); rate.clear()
         FyDirector.reset(); FyContentStore.ensure(app); FyPlatforms.ensure(app); FyTakeover.reset()
+        inbox.clear(); inboxDirty = false; lastTickAt = 0; restUntil = 0; agentEnd = null; readOffset = 0; presentAtTick = 0; SimCue.reset()
+        FyAgent.ensure(app); FyAgent.seed(app)
+        crew = FyAgent.newCrew(app, crewHost, sc).also { c ->
+            val seg0 = FyDirector.segment(FyContentStore.get(app)); c.segmentStarted(seg0.title, seg0.kind)
+        }
         lastPollAt = System.currentTimeMillis(); lastQuizAt = lastPollAt
         val srcCfg = FyPlatforms.sources.value
         if ("sim" in sourceIds) sources += SimulatedViewers(srcCfg.simIntensity)
@@ -188,6 +205,7 @@ object DfyLive {
         val level = prof?.level ?: "新观众"
         if (e.type == EvType.ENTER) present[e.userKey] = e
         val r = conv.ingest(e, level)
+        crew?.noteEvent(e.type)
         // short-term memory of this stream
         if (e.type == EvType.COMMENT && r.verdict == DfySafety.Verdict.OK) {
             val l = shortTerm.getOrPut(e.userKey) { mutableListOf() }; l += clean(e.text, 60); while (l.size > 4) l.removeAt(0)
@@ -236,7 +254,11 @@ object DfyLive {
         lastSpokeAt = System.currentTimeMillis()
         // opening: pick a topic if none, greet, open the first page
         val s = session!!
+        if (s.topic.isBlank() && agentOn(ctx)) FyAgent.life(ctx).get().nextPlan?.topics?.firstOrNull()?.let { t ->
+            s.topic = clean(t, 30); s.why = "这是我上次复盘后自己想聊的"; state.value = state.value.copy(topic = s.topic)
+        }
         if (s.topic.isBlank()) chooseTopic(ctx, s)
+        SimCue.topic = s.topic
         if (learning(s) && s.goalId.isBlank()) {
             val g = DfyKnowledge.newGoal(s.topic, s.why, s.startedBy)
             s.goalId = g.id
@@ -256,7 +278,12 @@ object DfyLive {
             if (cmd != null) { directorCmd(ctx, cmd); continue }
             val seg = FyDirector.tick(ctx, now)
             if (seg != null) { onSegment(ctx, seg); continue }
-            conv.closePollIfDue(now)?.let { conv.pushSystem("poll_result", 40, it) }
+            conv.closePollIfDue(now)?.let { conv.pushSystem("poll_result", 40, it); SimCue.pollOptions = 0 }
+            if (agentOn(ctx)) {
+                if (agentStep(ctx, now, drafting)) return
+                continue
+            }
+            if (inbox.isNotEmpty()) { legacyStep(ctx); continue } // agent switched off mid-stream: answer what it was holding
             val item = conv.next(now)
             state.value = state.value.copy(queue = conv.size(), poll = conv.poll, quiz = conv.quiz, guess = conv.guess)
             if (item != null) { respond(ctx, item); continue }
@@ -274,6 +301,12 @@ object DfyLive {
             DfyStore.update(ctx) { it.copy(knowledge = it.knowledge + g) }
         }
         addBubble(s, Bubble(System.currentTimeMillis(), "system", "环节：${seg.title}（${seg.minutes} 分钟）"))
+        val cr = crew
+        if (cr != null && agentOn(ctx)) {             // 复盘官 reviews the finished segment; the 导演 announces the new one
+            scope?.launch { runCatching { cr.reflectSegment(seg.title, seg.kind) }.onFailure { Log.w(TAG, "reflect: ${it.message}") } }
+            lastTickAt = 0
+            return
+        }
         turn(ctx, null, "[换环节] 现在进入「${seg.title}」环节（约 ${seg.minutes} 分钟）：${SegKind.instruction(seg.kind)} 用一句话自然过渡，然后开始。", filler = true)
     }
 
@@ -443,6 +476,222 @@ object DfyLive {
             }
         }
         turn(ctx, null, prompt, filler = true)
+    }
+
+    // ------------------------------------------------------------------ 直播专家组 (agent mode)
+
+    /** One brain iteration in agent mode. Returns true when the stream was wrapped up. */
+    private suspend fun agentStep(ctx: Context, now: Long, drafting: Boolean): Boolean {
+        val cr = crew ?: return false
+        while (true) {
+            val it = conv.next(now) ?: break
+            if (it.kind == "safety" && it.note == "self_harm") { respond(ctx, it); continue } // fixed text, never through the model
+            inbox["c${it.id}"] = it; inboxDirty = true
+        }
+        inbox.entries.removeAll { now - it.value.createdAt > 120_000 }
+        while (inbox.size > 16) inbox.remove(inbox.keys.first())
+        state.value = state.value.copy(queue = inbox.size, poll = conv.poll, quiz = conv.quiz, guess = conv.guess)
+        agentEnd?.let { wrapUp(ctx, it); return true }
+        if (now < restUntil) { lastSpokeAt = now; delay(300); return false }
+        val cfg = FyAgent.config(ctx)
+        val silent = now - lastSpokeAt
+        val quiet = !DfySpeaker.speaking.value && (!drafting || FyTakeover.pendingCount() < 3)
+        val due = now - lastTickAt >= cfg.intervalSec * 1000L || (inboxDirty && now - lastTickAt >= 2500) || (silent > idleGap(ctx) && now - lastTickAt >= 2500)
+        if (!due || !quiet) { delay(200); return false }
+        lastTickAt = now; inboxDirty = false
+        state.value = state.value.copy(thinking = true)
+        val out = try { cr.tick() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
+            Log.w(TAG, "crew: ${e.message}"); TickOutcome.Fallback(e.message ?: "出错")
+        }
+        state.value = state.value.copy(thinking = false)
+        publishSession()
+        agentEnd?.let { wrapUp(ctx, it); return true }
+        when (out) {
+            is TickOutcome.Ran -> if (!out.spoke && System.currentTimeMillis() - lastSpokeAt > idleGap(ctx) + 4000) filler(ctx) // cold-start filler
+            is TickOutcome.Fallback -> legacyStep(ctx)
+            TickOutcome.Budget -> legacyStep(ctx)
+            TickOutcome.Off -> Unit
+        }
+        return false
+    }
+
+    /** The crew could not decide: the simple engine answers the top comment or fills the silence. */
+    private suspend fun legacyStep(ctx: Context) {
+        val now = System.currentTimeMillis()
+        val best = inbox.entries.maxByOrNull { it.value.priority(now) }
+        if (best != null) { inbox.remove(best.key); respond(ctx, best.value); return }
+        if (now - lastSpokeAt > idleGap(ctx)) filler(ctx)
+    }
+
+    private fun toInbox(id: String, it: ConvItem, st: DfyState, now: Long): InboxItem {
+        val e = it.events.firstOrNull()
+        val v = e?.let { x -> st.viewers.find { p -> p.key == x.userKey } }
+        val nicks = it.events.distinctBy { x -> x.userKey }.take(3).joinToString("、") { x -> x.nick }
+        val text = when (it.kind) {
+            "gift" -> "送了 " + it.events.joinToString("、") { x -> "${x.giftName}×${maxOf(1, x.giftCount)}" }
+            "greet" -> "$nicks 进了直播间"
+            "thanks_like" -> "$nicks 等人点了 ${it.events.sumOf { x -> maxOf(1, x.giftCount) }} 个赞"
+            "thanks_follow" -> "$nicks 关注了你"
+            "poll_result" -> it.note
+            "quiz_answer" -> "答对了你的题（答案：${conv.quiz?.answer.orEmpty()}）"
+            "guess_win" -> "猜中了（${conv.guess?.answer.orEmpty()}）"
+            else -> e?.text.orEmpty() + (if (it.events.distinctBy { x -> x.userKey }.size > 1) "（${it.events.size} 人说了类似的话）" else "")
+        }
+        return InboxItem(id, it.kind, if (it.kind == "poll_result") "投票" else e?.nick.orEmpty(), e?.userKey.orEmpty(), clean(text, 100),
+            v?.level ?: "新观众", v?.streams ?: 1, v?.facts ?: emptyList(), it.priority(now), it.createdAt,
+            hidden = it.kind == "safety" || it.note == "rude")
+    }
+
+    /** Speak a final line (already written + safety-checked by the crew) with TTS + caption. */
+    private suspend fun speakText(ctx: Context, text: String, kind: String, source: String) {
+        val sc = scope ?: return
+        while (FyHumanVoice.talking.value || FyDirector.state.value.standby || FyDirector.state.value.voicePaused) delay(200)
+        val bubbleAt = System.currentTimeMillis()
+        turnIsFiller = kind == "thought"
+        val job = sc.launch {
+            speakLock.withLock {
+                val speech = SpeechPipeline(ctx, this) {}
+                val chunker = Chunker()
+                val spoken = StringBuilder()
+                for (p in chunker.feed(text) + chunker.flush()) { spoken.append(p); say(speech, p, bubbleAt, kind, spoken) }
+                speech.close()
+                speech.awaitDone()
+            }
+        }
+        turnJob = job
+        job.join()
+        turnIsFiller = false
+        exchanges.addLast("$source → 我：${clean(text, 50)}"); while (exchanges.size > 12) exchanges.removeFirst()
+        lastSpokeAt = System.currentTimeMillis()
+        DfySpeaker.idle()
+        state.value = state.value.copy(subtitle = "")
+        publishSession()
+    }
+
+    /** The room, as the 直播专家组 sees and acts on it. */
+    private val crewHost = object : CrewHost {
+        private fun ctx(): Context = appCtx ?: throw IllegalStateException("未开播")
+
+        override fun observe(): Observation {
+            val ctx = ctx(); val st = DfyStore.snapshot(ctx); val now = System.currentTimeMillis(); val s = session
+            val c = FyContentStore.get(ctx); val seg = FyDirector.segment(c)
+            val p = page
+            val pi = p?.let {
+                val full = (it.desc + " " + it.text).trim()
+                val off = readOffset.coerceIn(0, maxOf(0, full.length - 1))
+                PageInfo(it.title, it.url, host(it.url), full.drop(off).take(1500), it.links.take(10).map { l -> clean(l.text, 20) }, off, full.length)
+            }
+            val m = DfyMood.decayed(st.mood, now)
+            val trend = present.size - presentAtTick; presentAtTick = present.size
+            val minutes = s?.let { ((now - it.startedAt) / 60_000).toInt() } ?: 0
+            val stop = budgetStop(ctx)
+            val canEnd = stop != null || minutes >= st.settings.surfMaxMinutes - 1
+            return Observation(now, minutes, seg.title, seg.kind, FyDirector.secondsLeft(c, now), s?.topic.orEmpty(),
+                inbox.entries.map { (id, ci) -> toInbox(id, ci, st, now) }, pi, present.size, trend, DfyMood.label(m.mood), m.energy.toInt(),
+                FyTakeover.active(ctx), conv.poll != null, ((now - lastSpokeAt) / 1000).toInt(), exchanges.takeLast(4).toList(), canEnd,
+                stop ?: if (canEnd) "快到预设的直播时长了" else "", c.whitelist, DfyPersona.effective(ctx, st.settings).take(500),
+                FyDirector.promptBlock(c, now).take(600), c.requestsOn)
+        }
+
+        override suspend fun speak(line: Line): String {
+            val ctx = ctx()
+            if (line.emotion.isNotBlank()) faceOverride = line.emotion to System.currentTimeMillis() + 10_000
+            if (line.source == "提问观众") { SimCue.question = line.text; SimCue.questionAt = System.currentTimeMillis() }
+            if (FyTakeover.active(ctx)) {
+                FyTakeover.add("专家组 · " + line.source, line.text, listOfNotNull(line.emotion.takeIf { it.isNotBlank() }?.let { "FACE $it" }), line.kind)
+                return "已放进待审队列"
+            }
+            speakText(ctx, line.text, line.kind, line.source)
+            return "说了「${line.text.take(16)}」"
+        }
+
+        override suspend fun speakStreaming(line: Line): String {
+            val ctx = ctx(); val st = DfyStore.snapshot(ctx)
+            val item = line.commentId?.let { inbox[it] }
+            if (line.source == "提问观众") { SimCue.question = line.about; SimCue.questionAt = System.currentTimeMillis() }
+            val prompt = if (item != null) describe(st, item) + "（导演的意思：${line.about}）"
+                else "[专家组] 导演想让你说：${line.about}。用一两句自然地说出来。"
+            turn(ctx, item, prompt, filler = item == null)
+            return if (FyTakeover.active(ctx)) "现场写好，放进待审队列" else "现场说了"
+        }
+
+        override suspend fun browse(query: String, url: String, site: String): String {
+            val ctx = ctx(); val s = session ?: return "未开播"
+            val allowed = DfyStore.snapshot(ctx).settings.surfSources
+            val target = when {
+                url.startsWith("#") -> page?.links?.take(10)?.getOrNull((url.removePrefix("#").toIntOrNull() ?: 0) - 1)?.url ?: return "没有这个链接编号"
+                url.isNotBlank() -> url
+                else -> SurfSources.searchUrl(if (site in allowed) site else allowed.first(), query)
+            }
+            val before = s.hops.size
+            hop(ctx, target, if (url.isBlank()) "search" else "follow", if (url.isBlank()) "专家组：搜「$query」" else "专家组：点链接")
+            readOffset = 0
+            val last = s.hops.drop(before).lastOrNull()
+            return when { last == null -> "没打开（被规则跳过）"; !last.ok -> "页面不能看：${state.value.pageTitle.take(12)}"; else -> "打开了「${last.title.take(20)}」" }
+        }
+
+        override suspend fun readPage(): String {
+            val p = page ?: return "还没打开网页"
+            val total = (p.desc + " " + p.text).trim().length
+            if (readOffset + 1500 >= total) return "这页读完了"
+            readOffset += 1200
+            return "往下读到 $readOffset/$total 字"
+        }
+
+        override suspend fun scroll(down: Boolean): String {
+            readOffset = (readOffset + if (down) 600 else -600).coerceAtLeast(0)
+            withContext(Dispatchers.Main) { DfyBrowser.webView?.evaluateJavascript("window.scrollBy(0, ${if (down) 600 else -600})", null) }
+            return if (down) "往下滚" else "往上滚"
+        }
+
+        override suspend fun nextSegment(): String {
+            val ctx = ctx()
+            val seg = FyDirector.jumpTo(FyDirector.state.value.segIndex + 1, ctx)
+            onSegment(ctx, seg)
+            return "进入「${seg.title}」"
+        }
+
+        override fun setTopic(topic: String): String {
+            val s = session ?: return "未开播"
+            s.topic = clean(topic, 30); s.trail += s.topic; SimCue.topic = s.topic
+            state.value = state.value.copy(topic = s.topic, trail = s.trail.toList())
+            return "话题换成「${s.topic}」"
+        }
+
+        override fun startPoll(question: String, options: List<String>): String {
+            if (conv.poll != null) return "已有投票"
+            val now = System.currentTimeMillis()
+            val opts = options.map { clean(it, 16) }.filter { it.isNotBlank() }.take(4)
+            if (opts.size < 2) return "选项不够"
+            conv.poll = Poll(clean(question, 40), opts, now, now + 45_000)
+            SimCue.pollOptions = opts.size
+            session?.let { addBubble(it, Bubble(now, "system", "投票：${clean(question, 40)}（${opts.mapIndexed { i, o -> "${i + 1}.$o" }.joinToString(" ")}）")) }
+            state.value = state.value.copy(poll = conv.poll)
+            return "投票开始（45 秒）"
+        }
+
+        override fun setExpression(expr: String): String {
+            if (expr !in Expr.ALL) return "没有这个表情"
+            faceOverride = expr to System.currentTimeMillis() + 12_000
+            state.value = state.value.copy(expression = expr)
+            return "表情：${Expr.label(expr)}"
+        }
+
+        override fun remember(viewerKey: String, nick: String, fact: String): String {
+            val ctx = appCtx ?: return "未开播"
+            val f = clean(fact, 40)
+            scope?.launch {
+                DfyStore.update(ctx) { x -> x.copy(viewers = x.viewers.map { v ->
+                    if ((viewerKey.isNotBlank() && v.key == viewerKey) || (viewerKey.isBlank() && v.nick == nick)) v.copy(facts = (v.facts + f).distinct().takeLast(6)) else v }) }
+            }
+            return "记住了 $nick：$f"
+        }
+
+        override suspend fun rest(seconds: Int): String { restUntil = System.currentTimeMillis() + seconds.coerceIn(3, 30) * 1000L; return "歇 $seconds 秒" }
+
+        override suspend fun endStream(reason: String): String { agentEnd = clean(reason, 40).ifBlank { "到点了" }; return "下播：${agentEnd}" }
+
+        override fun markAnswered(id: String) { inbox.remove(id) }
     }
 
     // ------------------------------------------------------------------ one turn
@@ -824,6 +1073,16 @@ object DfyLive {
             )
         }
         state.value = state.value.copy(recap = s.recap)
+        crew?.let { cr ->
+            val after = DfyStore.snapshot(ctx)
+            val regulars = after.viewers.filter { it.lastStreamId == s.id && !it.blocked }.map { Triple(it.key, it.nick, it.streams) }
+            val log = StreamLog(s.id, ((now - s.startedAt) / 60_000).toInt(), s.trail.distinct(), s.hops.filter { it.ok }.map { it.title },
+                exchanges.toList(), present.size, regulars, s.bubbles.count { it.kind == "note" },
+                FyContentStore.get(ctx).enabledSegments.map { it.title })
+            runCatching { cr.endOfStream(log, FyContentStore.get(ctx).enabledSegments.map { PlanSegment(it.kind, it.minutes) }) }
+                .onSuccess { d -> addBubble(s, Bubble(System.currentTimeMillis(), "system", "📔 日记：" + clean(d.text, 200))) }
+                .onFailure { Log.w(TAG, "diary: ${it.message}") }
+        }
     }
 
     private suspend fun selfQuiz(ctx: Context, s: SurfSession) {

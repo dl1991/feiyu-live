@@ -52,6 +52,7 @@ import com.dl1991.feiyu.dafeiyu.SurfMode
 import com.dl1991.feiyu.dafeiyu.dafeiyuGraph
 import com.dl1991.feiyu.screens.ContentScreen
 import com.dl1991.feiyu.screens.DirectorScreen
+import com.dl1991.feiyu.screens.GrowthScreen
 import com.dl1991.feiyu.screens.HomeScreen
 import com.dl1991.feiyu.screens.LifeVoiceScreen
 import com.dl1991.feiyu.screens.LiveConnectScreen
@@ -68,6 +69,7 @@ object Routes {
     const val CONNECT = "tab/connect"
     const val CONTENT = "tab/content"
     const val PERSONA = "fy/persona"
+    const val GROWTH = "fy/growth"
     val TABS = listOf(HOME to "首页", LIFE to "人生&声音", CONNECT to "直播接入", CONTENT to "直播内容")
 
     /** feiyu://app/<name> → route. */
@@ -75,7 +77,7 @@ object Routes {
         if (u == null || u.scheme != "feiyu" || u.host != "app") return null
         return when (u.path?.trim('/')) {
             "", "home" -> HOME; "life" -> LIFE; "connect", "prelive" -> CONNECT; "content" -> CONTENT
-            "director" -> DfyRoutes.DIRECTOR; "live" -> DfyRoutes.LIVE; "voice" -> DfyRoutes.VOICE; "persona" -> PERSONA
+            "director" -> DfyRoutes.DIRECTOR; "growth" -> GROWTH; "live" -> DfyRoutes.LIVE; "voice" -> DfyRoutes.VOICE; "persona" -> PERSONA
             "her", "life-home" -> DfyRoutes.HOME; "chat" -> DfyRoutes.CHAT; "memory" -> DfyRoutes.MEMORY; "knowledge" -> DfyRoutes.KNOWLEDGE
             "timeline" -> DfyRoutes.TIMELINE; "viewers" -> DfyRoutes.VIEWERS; "settings" -> DfyRoutes.SETTINGS; "pending" -> DfyRoutes.PENDING
             else -> HOME
@@ -167,6 +169,7 @@ private fun AppShell(nav: NavHostController) {
                 composable(DfyRoutes.DIRECTOR) { DirectorScreen(back, open) }
                 composable(DfyRoutes.LIVE) { DfyLiveRoomScreen(back, open) }
                 composable(Routes.PERSONA) { PersonaScreen(back) }
+                composable(Routes.GROWTH) { GrowthScreen(back) }
                 dafeiyuGraph(nav)
             }
         }

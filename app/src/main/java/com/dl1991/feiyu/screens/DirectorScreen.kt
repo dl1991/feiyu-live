@@ -107,6 +107,9 @@ fun DirectorScreen(back: () -> Unit, open: (String) -> Unit) {
             if (!live) { FySpacer(8.dp); FyButton("去直播间开播", { open(DfyRoutes.LIVE) }, tonal = true) }
         }
 
+        // ---- 她在想 · 直播专家组
+        CrewPanel(open)
+
         // ---- 真人接管
         DriveBanner(takeover, autoApprove, talking)
         FySectionHeader("真人接管 · ${platform.label}")

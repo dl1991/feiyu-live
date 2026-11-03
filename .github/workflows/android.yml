@@ -76,3 +76,15 @@ jobs:
             out/feiyu-live-debug.apk
             out/signing.txt
           retention-days: 14
+
+      # JVM unit tests: tool-call parsing/validation + a scripted mini-stream through the 直播专家组 (fake model).
+      - name: Unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 7

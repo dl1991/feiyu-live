@@ -13,6 +13,18 @@ Locally: JDK 17 + Android SDK (platform 36, build-tools 35.0.0), then
 ./gradlew :app:assembleDebug
 ```
 
+## Agent: 直播专家组 (v0.4)
+
+大肥鱼 streams on her own and grows from it. Every few seconds (and on new comments) one orchestrator
+tick runs a crew of small experts on the same model (a different provider per expert is optional):
+弹幕运营 (picks comments, spots regulars) → 研究员 (page → talking points) → 导演 (inner thought, goal,
+≤3 JSON tool calls) → 编剧 (her lines) → 安全审核 (rule filter always on + model review) → 主播 speaks
+(TTS + caption, or the 真人接管 approval queue). After each segment / stream the 复盘官 scores engagement
+per topic, updates her goals, interests, skills and regulars, writes a diary, and proposes the next 节目单
+(editable in 「她的成长」). Any expert can be switched off (rules take over); repeated 导演 failures or
+the tokens/hour cap fall back to the simple engine. Code: `FyCrew.kt`, `FyAgentTools.kt`, `FyLifeState.kt`,
+`FyAgent.kt`; JVM tests in `FyAgentToolsTest` / `FyCrewTest` (scripted mini-stream with a fake model).
+
 ## Avatar
 
 Default avatar: 「二次元大肥鱼」 sprite set (`app/src/main/assets/dafeiyu/avatar/`, `manifest.json`
