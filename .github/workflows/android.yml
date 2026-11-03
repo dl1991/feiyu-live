@@ -1,0 +1,79 @@
+# Build the 大肥鱼直播 debug APK (com.dl1991.feiyu) and upload it.
+name: Android
+
+on:
+  push:
+    branches: [main, dev, "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages (platform 36, build-tools 35)
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-36" "build-tools;35.0.0" > /dev/null
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # One fixed signing key for every build (Actions secret, never in git)
+      # so new APKs install over old ones.
+      - name: Signing keystore
+        env:
+          KS: ${{ secrets.MIBOT_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/mibot.p12"
+            echo "MIBOT_KEYSTORE_FILE=$RUNNER_TEMP/mibot.p12" >> "$GITHUB_ENV"
+            echo "fixed signing key: yes"
+          else
+            echo "::warning::MIBOT_KEYSTORE_B64 not set; using the runner's debug key"
+          fi
+
+      - name: assembleDebug
+        env:
+          MIBOT_KEYSTORE_PASSWORD: ${{ secrets.MIBOT_KEYSTORE_PASSWORD }}
+          MIBOT_KEY_ALIAS: ${{ secrets.MIBOT_KEY_ALIAS }}
+          MIBOT_KEY_PASSWORD: ${{ secrets.MIBOT_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8"
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp $(find app/build/outputs/apk -name '*.apk' | head -n1) out/feiyu-live-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs out/feiyu-live-debug.apk | tee out/signing.txt || true
+          ls -la out
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: feiyu-live-debug-apk
+          path: |
+            out/feiyu-live-debug.apk
+            out/signing.txt
+          retention-days: 14

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">大肥鱼直播</string>
+    <string name="a11y_label">大肥鱼直播 · 抖音评论读取</string>
+    <string name="a11y_desc">只在你开启「抖音 App 评论」来源时，读取抖音直播间里可见的评论行，交给大肥鱼回应。不点击、不输入、不读取其他 App。</string>
+</resources>

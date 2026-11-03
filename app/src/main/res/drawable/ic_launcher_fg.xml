@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- whale body -->
+    <path android:fillColor="#FFFFFF" android:pathData="M30,58 C30,44 42,36 56,36 C70,36 80,45 80,57 C80,68 70,74 56,74 C46,74 38,71 33,66 L24,72 L26,61 Z" />
+    <!-- tail -->
+    <path android:fillColor="#FFFFFF" android:pathData="M78,52 L88,44 L86,56 L90,64 L79,60 Z" />
+    <!-- eye -->
+    <path android:fillColor="#17181A" android:pathData="M46,53 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <!-- live dot -->
+    <path android:fillColor="#17181A" android:pathData="M66,30 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>
