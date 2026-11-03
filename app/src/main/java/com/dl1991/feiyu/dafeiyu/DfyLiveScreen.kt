@@ -125,8 +125,10 @@ private fun OffAir(ctx: android.content.Context, room: RoomState, onBack: () -> 
         }
         FySectionHeader(t("开播", "Go live"))
         FyCard(padding = PaddingValues(14.dp)) {
-            FyFilterChips(listOf(t("带观众冲浪", "Surf"), t("学知识", "Learn")), if (mode == SurfMode.SURF) t("带观众冲浪", "Surf") else t("学知识", "Learn")) {
-                mode = if (it == t("学知识", "Learn")) SurfMode.LEARN else SurfMode.SURF
+            val surfLabel = t("带观众冲浪", "Surf")
+            val learnLabel = t("学知识", "Learn")
+            FyFilterChips(listOf(surfLabel, learnLabel), if (mode == SurfMode.SURF) surfLabel else learnLabel) {
+                mode = if (it == learnLabel) SurfMode.LEARN else SurfMode.SURF
             }
             Spacer(Modifier.height(10.dp))
             val goals = st.knowledge.filter { it.status == "learning" && it.notes.isEmpty() }

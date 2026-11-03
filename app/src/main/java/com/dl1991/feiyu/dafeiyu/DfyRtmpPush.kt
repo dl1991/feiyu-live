@@ -192,7 +192,7 @@ class DfyStreamService : Service(), ConnectChecker {
                 val code = intent?.getIntExtra(DfyRtmp.EXTRA_PROJ_CODE, 0) ?: 0
                 @Suppress("DEPRECATION") val data = intent?.getParcelableExtra<Intent>(DfyRtmp.EXTRA_PROJ_DATA) ?: throw IllegalStateException("没有录屏授权")
                 val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                ScreenSource(this, mpm.getMediaProjection(code, data))
+                ScreenSource(this, mpm.getMediaProjection(code, data) ?: throw IllegalStateException("录屏授权已失效"))
             } else CanvasVideoSource(DfyCompositor(preset.w, preset.h))
             val a = TtsAudioSource(); audio = a
             DfySpeaker.sink = { pcm -> a.push(pcm) }
