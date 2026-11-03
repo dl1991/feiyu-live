@@ -74,9 +74,10 @@ class DfyLogicTest {
     }
 
     @Test fun moodDecaysToNeutral() {
-        val m = DfyMood.apply(MoodState(), "joyful", 3, "live", 0)
+        val t0 = 1_000L                                           // updatedAt = 0 means "never set" (no decay), so start after 0
+        val m = DfyMood.apply(MoodState(), "joyful", 3, "live", t0)
         assertEquals("joyful", m.mood)
-        val later = DfyMood.decayed(m, 80 * 3_600_000L)
+        val later = DfyMood.decayed(m, t0 + 80 * 3_600_000L)
         assertEquals("neutral", later.mood)
     }
 
