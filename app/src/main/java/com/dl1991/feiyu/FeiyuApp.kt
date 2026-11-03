@@ -18,6 +18,7 @@ class FeiyuApp : Application() {
     override fun onCreate() {
         super.onCreate()
         appScope.launch(Dispatchers.IO) {
+            runCatching { com.dl1991.feiyu.dafeiyu.DfySprites.init(this@FeiyuApp) }
             runCatching { FyProviders.ensure(this@FeiyuApp) }
             runCatching { FyContentStore.ensure(this@FeiyuApp) }
             runCatching { FyPlatforms.ensure(this@FeiyuApp) }

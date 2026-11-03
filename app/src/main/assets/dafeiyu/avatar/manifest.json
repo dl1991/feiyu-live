@@ -1,0 +1,65 @@
+{
+ "name": "二次元大肥鱼",
+ "version": 1,
+ "width": 512,
+ "height": 768,
+ "expressions": {
+  "neutral": "neutral.png",
+  "happy": "happy.png",
+  "surprised": "surprised.png",
+  "sad": "sad.png",
+  "thinking": "thinking.png",
+  "shy": "shy.png"
+ },
+ "overlays": {
+  "blink": {
+   "file": "blink.png",
+   "x": 149,
+   "y": 225
+  },
+  "mouth_slight": {
+   "file": "mouth_slight.png",
+   "x": 201,
+   "y": 291
+  },
+  "mouth_wide": {
+   "file": "mouth_wide.png",
+   "x": 200,
+   "y": 289
+  }
+ },
+ "map": {
+  "neutral": "neutral",
+  "happy": "happy",
+  "excited": "happy",
+  "curious": "thinking",
+  "confused": "thinking",
+  "surprised": "surprised",
+  "sleepy": "sad",
+  "sad": "sad",
+  "annoyed": "thinking",
+  "shy": "shy"
+ },
+ "noBlink": [
+  "happy"
+ ],
+ "crops": {
+  "full": [
+   0,
+   0,
+   512,
+   768
+  ],
+  "bust": [
+   46,
+   14,
+   466,
+   434
+  ]
+ },
+ "pivot": [
+  256,
+  700
+ ],
+ "credits": "Original AI-generated artwork for FeiyuLive. 大肥鱼 is a community fan persona of DeepSeek; not official DeepSeek art."
+}

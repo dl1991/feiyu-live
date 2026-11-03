@@ -214,7 +214,7 @@ class DfyCompositor(val w: Int, val h: Int) {
     private fun standby(c: Canvas, text: String, t: Double, pad: Float) {
         val area = RectF(pad, 118 * s, w - pad, h - 90 * s)
         c.drawRoundRect(area, 22 * s, 22 * s, card)
-        DfyAvatar.draw(c, area.centerX(), area.top + area.height() * 0.38f, area.width() * 0.55f, Expr.SLEEPY, t, 0f)
+        DfyAvatar.draw(c, area.centerX(), area.top + area.height() * 0.38f, area.width() * 0.55f, Expr.SLEEPY, t, 0f, full = true)
         val lay = StaticLayout.Builder.obtain(text, 0, text.length, cardText, (area.width() - 60 * s).toInt()).setAlignment(Layout.Alignment.ALIGN_CENTER).setMaxLines(3).build()
         c.save(); c.translate(area.left + 30 * s, area.top + area.height() * 0.70f); lay.draw(c); c.restore()
         c.drawText("稍等片刻 · 直播暂停中", area.left + 30 * s, area.bottom - 30 * s, small)

@@ -8,14 +8,16 @@ import android.graphics.RectF
 import kotlin.math.PI
 import kotlin.math.sin
 
+
 /** Avatar expressions (a superset of the six the stream needs). */
 object Expr {
     const val NEUTRAL = "neutral"; const val HAPPY = "happy"; const val CURIOUS = "curious"; const val SURPRISED = "surprised"
     const val CONFUSED = "confused"; const val SLEEPY = "sleepy"; const val EXCITED = "excited"; const val SAD = "sad"; const val ANNOYED = "annoyed"
-    val ALL = listOf(NEUTRAL, HAPPY, CURIOUS, SURPRISED, CONFUSED, SLEEPY, EXCITED, SAD, ANNOYED)
+    const val SHY = "shy"
+    val ALL = listOf(NEUTRAL, HAPPY, CURIOUS, SURPRISED, CONFUSED, SLEEPY, EXCITED, SAD, ANNOYED, SHY)
     fun label(e: String) = when (e) {
         HAPPY -> "开心"; CURIOUS -> "好奇"; SURPRISED -> "惊讶"; CONFUSED -> "疑惑"; SLEEPY -> "犯困"; EXCITED -> "兴奋"
-        SAD -> "低落"; ANNOYED -> "不爽"; else -> "平静"
+        SAD -> "低落"; ANNOYED -> "不爽"; SHY -> "害羞"; else -> "平静"
     }
     /** Default expression for a mood (a turn may override it with [[FACE …]]). */
     fun forMood(mood: String, intensity: Double, energy: Double): String = when {
@@ -31,12 +33,33 @@ object Expr {
 }
 
 /**
- * Procedural 大肥鱼 (a round blue whale-girl, flat vector style — no external art assets, so no
+ * Avatar entry point shared by the Compose room, the floating whale and the RTMP compositor.
+ * Default style is the sprite-based 「二次元大肥鱼」 ([DfySprites]); 「简笔鱼」 is the old procedural
+ * fish ([DfyFish]) and also the fallback whenever sprites are not loaded yet / failed to load.
+ * [full] = whole body inside a box size×1.5size (standby card); otherwise a bust inside ≈size×size.
+ */
+object DfyAvatar {
+    fun draw(c: Canvas, cx: Float, cy: Float, size: Float, expr: String, t: Double, mouth: Float, full: Boolean = false) {
+        val sp = DfySprites.current()
+        if (sp == null) { DfyFish.draw(c, cx, cy, size, expr, t, mouth); return }
+        if (full) {
+            val bw = size; val bh = size * 1.5f
+            DfySprites.draw(c, sp, RectF(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2), expr, t, mouth, "full")
+        } else {
+            val side = size * 1.08f; val y = cy - size * 0.06f
+            DfySprites.draw(c, sp, RectF(cx - side / 2, y - side / 2, cx + side / 2, y + side / 2), expr, t, mouth, "bust")
+        }
+    }
+    fun blinking(t: Double) = DfyFish.blinking(t)
+}
+
+/**
+ * Procedural 大肥鱼 「简笔鱼」 (a round blue whale-girl, flat vector style — no external art assets, so no
  * licensing questions). Draws into any android.graphics.Canvas: the Compose room and the RTMP
  * compositor share it. Animation inputs: [t] seconds (breathing / tail sway / blink schedule),
  * [mouth] 0..1 from TTS loudness.
  */
-object DfyAvatar {
+object DfyFish {
     private val body = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x4D, 0x6B, 0xFE) }   // DeepSeek-ish blue
     private val belly = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xE8, 0xEE, 0xFF) }
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x14, 0x18, 0x2B) }

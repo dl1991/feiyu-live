@@ -1,6 +1,18 @@
 package com.dl1991.feiyu.screens
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.rememberCoroutineScope
+import com.dl1991.feiyu.dafeiyu.AvatarStyle
+import com.dl1991.feiyu.dafeiyu.DfySprites
+import com.dl1991.feiyu.dafeiyu.Expr
+import com.dl1991.feiyu.dafeiyu.WhaleAvatar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -58,6 +70,17 @@ fun ContentScreen(back: (() -> Unit)?, open: (String) -> Unit) {
     val userPresets by FyContentStore.presets.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var newTopic by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    val avatarStyle by DfySprites.style.collectAsState()
+    val customName by DfySprites.customName.collectAsState()
+    var previewExpr by remember { mutableStateOf(Expr.NEUTRAL) }
+    val importZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            val err = withContext(Dispatchers.IO) { DfySprites.init(ctx); DfySprites.importZip(ctx, uri) }
+            Toast.makeText(ctx, err ?: "立绘已导入", Toast.LENGTH_SHORT).show()
+        }
+    }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { DfySprites.init(ctx) } }
 
     fun set(f: (ContentSettings) -> ContentSettings) = FyContentStore.update(ctx, f)
     fun setSeg(i: Int, f: (Segment) -> Segment) = set { s -> s.copy(segments = s.segments.mapIndexed { j, g -> if (j == i) f(g) else g }) }
@@ -144,6 +167,28 @@ fun ContentScreen(back: (() -> Unit)?, open: (String) -> Unit) {
             FyToggle("接受观众点播", c.requestsOn) { on -> set { it.copy(requestsOn = on) } }
             FySlider("主动投票间隔", c.pollEveryMin, 0..60, suffix = " 分", left = "0 = 不主动") { v -> set { it.copy(pollEveryMin = v) } }
             FySlider("主动答题间隔", c.quizEveryMin, 0..60, suffix = " 分", left = "0 = 不主动") { v -> set { it.copy(quizEveryMin = v) } }
+        }
+
+        FySectionHeader("主播形象")
+        FyCard(padding = PaddingValues(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.background(FyTokens.tile(), FyTokens.RowShape)) { WhaleAvatar(previewExpr, 96.dp) }
+                Text(if (avatarStyle == AvatarStyle.FISH) "简笔画风格的圆滚滚鲸鱼，不依赖图片素材。"
+                    else "立绘会眨眼、呼吸，说话时口型跟着声音动，表情随情绪切换。", fontSize = FyType.Secondary)
+            }
+            FySpacer(8.dp)
+            val styles = listOf(AvatarStyle.ANIME, AvatarStyle.FISH) + (if (customName.isNotBlank()) listOf(AvatarStyle.CUSTOM) else emptyList())
+            FyFilterChips(styles.map { AvatarStyle.label(it) }, AvatarStyle.label(avatarStyle)) { l ->
+                styles.firstOrNull { AvatarStyle.label(it) == l }?.let { DfySprites.setStyle(ctx, it) }
+            }
+            GroupLabel("预览表情")
+            FyFilterChips(Expr.ALL.map { Expr.label(it) }, Expr.label(previewExpr)) { l -> Expr.ALL.firstOrNull { Expr.label(it) == l }?.let { previewExpr = it } }
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FyButton("导入自己的立绘（.zip）", { importZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }, tonal = true)
+                if (customName.isNotBlank()) FyButton("删除", { DfySprites.removeCustom(ctx) }, tonal = true)
+            }
+            Text("压缩包内放 manifest.json 和同名 PNG（neutral / happy / surprised / sad / thinking / shy，可选 blink、mouth_slight、mouth_wide 贴片），画框需一致。",
+                Modifier.padding(top = 6.dp), fontSize = FyType.Secondary)
         }
 
         FySectionHeader("画面")
