@@ -28,13 +28,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
+      # setup-android's default package list includes the removed 'tools'
+      # package, which makes sdkmanager fail; name the packages explicitly.
+      - name: Set up Android SDK (platform 36, build-tools 35)
         uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages (platform 36, build-tools 35)
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-36" "build-tools;35.0.0" > /dev/null
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
